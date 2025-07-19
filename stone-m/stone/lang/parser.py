@@ -352,7 +352,9 @@ class StoneParser(object):
             path (Optional[str]): Path to specification on filesystem. Only
                 used to tag tokens with the file they originated from.
         """
-        self.path = path
+       
+        
+        self.exhausted = True
         parsed_data = self.yacc.parse(data, lexer=self.lexer, debug=self.debug)
         # It generally makes sense for lexer errors to come first, because
         # those can be the root of parser errors. Also, since we only show one
