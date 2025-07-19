@@ -1,349 +1,82 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
-from collections import OrderedDict
 import logging
-import six
+from collections import OrderedDict
 
 import ply.yacc as yacc
 
-from .lexer import StoneLexer, StoneNull
+from .ast import (
+    AstAlias,
+    AstAnnotationDef,
+    AstAnnotationRef,
+    AstAnnotationTypeDef,
+    AstAttrField,
+    AstExample,
+    AstExampleField,
+    AstExampleRef,
+    AstField,
+    AstNamespace,
+    AstImport,
+    AstRouteDef,
+    AstStructDef,
+    AstStructPatch,
+    AstSubtypeField,
+    AstTagRef,
+    AstTypeRef,
+    AstUnionDef,
+    AstUnionPatch,
+    AstVoidField,
+)
+from .lexer import (
+    Lexer,
+    NullToken,
+)
 
-class _Element(object):
+logger = logging.getLogger('stone.frontend.parser')
 
-    def __init__(self, path, lineno, lexpos):
-        """
-        Args:
-            lineno (int): The line number where the start of this element
-                occurs.
-            lexpos (int): The character offset into the file where this element
-                occurs.
-        """
-        self.path = path
-        self.lineno = lineno
-        self.lexpos = lexpos
 
-class StoneNamespace(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, doc):
-        """
-        Args:
-            name (str): The namespace of the spec.
-            doc (Optional[str]): The docstring for this namespace.
-        """
-        super(StoneNamespace, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.doc = doc
-
-    def __str__(self):
-        return self.__repr__()
-
-    def __repr__(self):
-        return 'StoneNamespace({!r})'.format(self.name)
-
-class StoneImport(_Element):
-
-    def __init__(self, path, lineno, lexpos, target):
-        """
-        Args:
-            target (str): The name of the namespace to import.
-        """
-        super(StoneImport, self).__init__(path, lineno, lexpos)
-        self.target = target
-
-    def __str__(self):
-        return self.__repr__()
-
-    def __repr__(self):
-        return 'StoneImport({!r})'.format(self.target)
-
-class StoneAlias(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, type_ref, doc):
-        """
-        Args:
-            name (str): The name of the alias.
-            type_ref (StoneTypeRef): The data type of the field.
-            doc (Optional[str]): Documentation string for the alias.
-        """
-        super(StoneAlias, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.type_ref = type_ref
-        self.doc = doc
-
-    def __repr__(self):
-        return 'StoneAlias({!r}, {!r})'.format(self.name, self.type_ref)
-
-class StoneTypeDef(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, extends, doc, fields,
-                 examples):
-        """
-        Args:
-            name (str): Name assigned to the type.
-            extends (Optional[str]); Name of the type this inherits from.
-            doc (Optional[str]): Docstring for the type.
-            fields (List[StoneField]): Fields of a type, not including
-                inherited ones.
-            examples (Optional[OrderedDict[str, StoneExample]]): Map from label
-                to example.
-        """
-        super(StoneTypeDef, self).__init__(path, lineno, lexpos)
-
-        assert isinstance(name, six.text_type), type(name)
-        self.name = name
-        assert isinstance(extends, (StoneTypeRef, type(None))), type(extends)
-        self.extends = extends
-        assert isinstance(doc, (six.text_type, type(None)))
-        self.doc = doc
-        assert isinstance(fields, list)
-        self.fields = fields
-        assert isinstance(examples, (OrderedDict, type(None))), type(examples)
-        self.examples = examples
-
-    def __str__(self):
-        return self.__repr__()
-
-    def __repr__(self):
-        return 'StoneTypeDef({!r}, {!r}, {!r})'.format(
-            self.name,
-            self.extends,
-            self.fields,
-        )
-
-class StoneStructDef(StoneTypeDef):
-
-    def __init__(self, path, lineno, lexpos, name, extends, doc, fields,
-                 examples, subtypes=None):
-        """
-        Args:
-            subtypes (Tuple[List[StoneSubtypeField], bool]): Inner list
-                enumerates subtypes. The bool indicates whether this struct
-                is a catch-all.
-
-        See StoneTypeDef for other constructor args.
-        """
-
-        super(StoneStructDef, self).__init__(
-            path, lineno, lexpos, name, extends, doc, fields, examples)
-        assert isinstance(subtypes, (tuple, type(None))), type(subtypes)
-        self.subtypes = subtypes
-
-    def __repr__(self):
-        return 'StoneStructDef({!r}, {!r}, {!r})'.format(
-            self.name,
-            self.extends,
-            self.fields,
-        )
-
-class StoneUnionDef(StoneTypeDef):
-
-    def __repr__(self):
-        return 'StoneUnionDef({!r}, {!r}, {!r})'.format(
-            self.name,
-            self.extends,
-            self.fields,
-        )
-
-class StoneTypeRef(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, args, nullable, ns):
-        """
-        Args:
-            name (str): Name of the referenced type.
-            args (tuple[list, dict]): Arguments to type.
-            nullable (bool): Whether the type is nullable (can be null)
-            ns (Optional[str]): Namespace that referred type is a member of.
-                If none, then refers to the current namespace.
-        """
-        super(StoneTypeRef, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.args = args
-        self.nullable = nullable
-        self.ns = ns
-
-    def __repr__(self):
-        return 'StoneTypeRef({!r}, {!r}, {!r}, {!r})'.format(
-            self.name,
-            self.args,
-            self.nullable,
-            self.ns,
-        )
-
-class StoneTagRef(_Element):
-
-    def __init__(self, path, lineno, lexpos, tag):
-        """
-        Args:
-            tag (str): Name of the referenced type.
-        """
-        super(StoneTagRef, self).__init__(path, lineno, lexpos)
-        self.tag = tag
-
-    def __repr__(self):
-        return 'StoneTagRef({!r})'.format(
-            self.tag,
-        )
-
-class StoneField(_Element):
+class ParserFactory:
     """
-    Represents both a field of a struct and a field of a union.
-    TODO(kelkabany): Split this into two different classes.
-    """
+    After instantiating a ParserFactory, call get_parser() to get an object
+    with a parse() method. It so happens that the object is also a
+    ParserFactory. The purpose of get_parser() is to reset the internal state
+    of the fatory. The details for why these aren't cleanly separated have to
+    do with the inability to separate out the yacc.yacc BNF definition parser
+    from the class methods that implement the parser handling logic.
 
-    def __init__(self, path, lineno, lexpos, name, type_ref, deprecated):
-        """
-        Args:
-            name (str): The name of the field.
-            type_ref (StoneTypeRef): The data type of the field.
-            deprecated (bool): Whether the field is deprecated.
-        """
-        super(StoneField, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.type_ref = type_ref
-        self.doc = None
-        self.has_default = False
-        self.default = None
-        self.deprecated = deprecated
-
-    def set_doc(self, docstring):
-        self.doc = docstring
-
-    def set_default(self, default):
-        self.has_default = True
-        self.default = default
-
-    def __repr__(self):
-        return 'StoneField({!r}, {!r})'.format(
-            self.name,
-            self.type_ref,
-        )
-
-class StoneVoidField(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, catch_all):
-        super(StoneVoidField, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.catch_all = catch_all
-        self.doc = None
-
-    def set_doc(self, docstring):
-        self.doc = docstring
-
-    def __str__(self):
-        return self.__repr__()
-
-    def __repr__(self):
-        return 'StoneVoidField({!r}, {!r})'.format(
-            self.name,
-            self.catch_all,
-        )
-
-class StoneSubtypeField(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, type_ref):
-        super(StoneSubtypeField, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.type_ref = type_ref
-
-    def __repr__(self):
-        return 'StoneSubtypeField({!r}, {!r})'.format(
-            self.name,
-            self.type_ref,
-        )
-
-class StoneRouteDef(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, deprecated,
-                 arg_type_ref, result_type_ref, error_type_ref=None):
-        super(StoneRouteDef, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.deprecated = deprecated
-        self.arg_type_ref = arg_type_ref
-        self.result_type_ref = result_type_ref
-        self.error_type_ref = error_type_ref
-        self.doc = None
-        self.attrs = {}
-
-    def set_doc(self, docstring):
-        self.doc = docstring
-
-    def set_attrs(self, attrs):
-        self.attrs = attrs
-
-class StoneAttrField(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, value):
-        super(StoneAttrField, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.value = value
-
-    def __repr__(self):
-        return 'StoneAttrField({!r}, {!r})'.format(
-            self.name,
-            self.value,
-        )
-
-class StoneExample(_Element):
-
-    def __init__(self, path, lineno, lexpos, label, text, fields):
-        super(StoneExample, self).__init__(path, lineno, lexpos)
-        self.label = label
-        self.text = text
-        self.fields = fields
-
-    def __repr__(self):
-        return 'StoneExample({!r}, {!r}, {!r})'.format(
-            self.label,
-            self.text,
-            self.fields,
-        )
-
-class StoneExampleField(_Element):
-
-    def __init__(self, path, lineno, lexpos, name, value):
-        super(StoneExampleField, self).__init__(path, lineno, lexpos)
-        self.name = name
-        self.value = value
-
-    def __repr__(self):
-        return 'StoneExampleField({!r}, {!r})'.format(
-            self.name,
-            self.value,
-        )
-
-class StoneExampleRef(_Element):
-
-    def __init__(self, path, lineno, lexpos, label):
-        super(StoneExampleRef, self).__init__(path, lineno, lexpos)
-        self.label = label
-
-    def __repr__(self):
-        return 'StoneExampleRef({!r})'.format(self.label)
-
-class StoneParser(object):
-    """
     Due to how ply.yacc works, the docstring of each parser method is a BNF
     rule. Comments that would normally be docstrings for each parser rule
     method are kept before the method definition.
     """
 
     # Ply parser requiment: Tokens must be re-specified in parser
-    tokens = StoneLexer.tokens
+    tokens = Lexer.tokens
 
     # Ply feature: Starting grammar rule
-    start = str('spec')  # PLY wants a 'str' instance; this makes it work in Python 2 and 3
+    start = 'spec'  # PLY wants a 'str' instance; this makes it work in Python 2 and 3
 
     def __init__(self, debug=False):
         self.debug = debug
         self.yacc = yacc.yacc(module=self, debug=self.debug, write_tables=self.debug)
-        self.lexer = StoneLexer()
-        self._logger = logging.getLogger('stone.stone.parser')
+        self.lexer = Lexer()
         # [(token type, token value, line number), ...]
         self.errors = []
         # Path to file being parsed. This is added to each token for its
         # utility in error reporting. But the path is never accessed, so this
         # is optional.
         self.path = None
+        self.anony_defs = []
+        self.exhausted = True
+
+    def get_parser(self):
+        """
+        Returns a ParserFactory with the state reset so it can be used to
+        parse again.
+
+        :return: ParserFactory
+        """
+        self.path = None
+        self.anony_defs = []
+        self.exhausted = False
+        return self
 
     def parse(self, data, path=None):
         """
@@ -352,16 +85,16 @@ class StoneParser(object):
             path (Optional[str]): Path to specification on filesystem. Only
                 used to tag tokens with the file they originated from.
         """
-       
-        
-        self.exhausted = True
+        assert not self.exhausted, 'Must call get_parser() to reset state.'
+        self.path = path
         parsed_data = self.yacc.parse(data, lexer=self.lexer, debug=self.debug)
         # It generally makes sense for lexer errors to come first, because
         # those can be the root of parser errors. Also, since we only show one
         # error max right now, it's best to show the lexing one.
         for err_msg, lineno in self.lexer.errors[::-1]:
             self.errors.insert(0, (err_msg, lineno, self.path))
-        self.path = None
+        parsed_data.extend(self.anony_defs)
+        self.exhausted = True
         return parsed_data
 
     def test_lexing(self, data):
@@ -409,8 +142,12 @@ class StoneParser(object):
 
     def p_definition(self, p):
         """definition : alias
+                      | annotation
+                      | annotation_type
                       | struct
+                      | struct_patch
                       | union
+                      | union_patch
                       | route"""
         p[0] = p[1]
 
@@ -421,22 +158,25 @@ class StoneParser(object):
             doc = None
             if len(p) > 4:
                 doc = p[5]
-            p[0] = StoneNamespace(
+            p[0] = AstNamespace(
                 self.path, p.lineno(1), p.lexpos(1), p[2], doc)
         else:
             raise ValueError('Expected namespace keyword')
 
     def p_import(self, p):
         'import : IMPORT ID NL'
-        p[0] = StoneImport(self.path, p.lineno(1), p.lexpos(1), p[2])
+        p[0] = AstImport(self.path, p.lineno(1), p.lexpos(1), p[2])
 
     def p_alias(self, p):
         """alias : KEYWORD ID EQ type_ref NL
-                 | KEYWORD ID EQ type_ref NL INDENT docsection DEDENT"""
+                 | KEYWORD ID EQ type_ref NL INDENT annotation_ref_list docsection DEDENT"""
         if p[1] == 'alias':
-            doc = p[7] if len(p) > 6 else None
-            p[0] = StoneAlias(
+            has_annotations = len(p) > 6 and p[7] is not None
+            doc = p[8] if len(p) > 6 else None
+            p[0] = AstAlias(
                 self.path, p.lineno(1), p.lexpos(1), p[2], p[4], doc)
+            if has_annotations:
+                p[0].set_annotations(p[7])
         else:
             raise ValueError('Expected alias keyword')
 
@@ -535,7 +275,7 @@ class StoneParser(object):
 
     def p_type_ref(self, p):
         'type_ref : ID args nullable'
-        p[0] = StoneTypeRef(
+        p[0] = AstTypeRef(
             path=self.path,
             lineno=p.lineno(1),
             lexpos=p.lexpos(1),
@@ -548,7 +288,7 @@ class StoneParser(object):
     # A reference to a type in another namespace.
     def p_foreign_type_ref(self, p):
         'type_ref : ID DOT ID args nullable'
-        p[0] = StoneTypeRef(
+        p[0] = AstTypeRef(
             path=self.path,
             lineno=p.lineno(1),
             lexpos=p.lexpos(1),
@@ -557,6 +297,31 @@ class StoneParser(object):
             nullable=p[5],
             ns=p[1],
         )
+
+    # --------------------------------------------------------------
+    # Annotation types
+    #
+    # An example annotation type:
+    #
+    # annotation_type Sensitive
+    #     "This is a docstring for the annotation type"
+    #
+    #     sensitivity Int32
+    #
+    #     reason String?
+    #         "This is a docstring for the field"
+    #
+
+    def p_annotation_type(self, p):
+        """annotation_type : ANNOTATION_TYPE ID NL \
+                              INDENT docsection field_list DEDENT"""
+        p[0] = AstAnnotationTypeDef(
+            path=self.path,
+            lineno=p.lineno(1),
+            lexpos=p.lexpos(1),
+            name=p[2],
+            doc=p[5],
+            params=p[6])
 
     # --------------------------------------------------------------
     # Structs
@@ -585,24 +350,42 @@ class StoneParser(object):
     #
 
     def p_enumerated_subtypes(self, p):
-        """enumerated_subtypes : UNION asterix_option NL INDENT subtypes_list DEDENT
+        """enumerated_subtypes : uniont NL INDENT subtypes_list DEDENT
                                | empty"""
         if len(p) > 2:
-            p[0] = (p[5], p[2])
+            p[0] = (p[4], p[1][0] == 'union')
 
     def p_struct(self, p):
         """struct : STRUCT ID inheritance NL \
                      INDENT docsection enumerated_subtypes field_list examples DEDENT"""
-        p[0] = StoneStructDef(
+        self.make_struct(p)
+
+    def p_anony_struct(self, p):
+        """anony_def : STRUCT empty inheritance NL \
+                INDENT docsection enumerated_subtypes field_list examples DEDENT"""
+        self.make_struct(p)
+
+    def make_struct(self, p):
+        p[0] = AstStructDef(
             path=self.path,
-            lineno=p.lineno(2),
-            lexpos=p.lexpos(2),
+            lineno=p.lineno(1),
+            lexpos=p.lexpos(1),
             name=p[2],
             extends=p[3],
             doc=p[6],
             subtypes=p[7],
             fields=p[8],
             examples=p[9])
+
+    def p_struct_patch(self, p):
+        """struct_patch : PATCH STRUCT ID NL INDENT field_list examples DEDENT"""
+        p[0] = AstStructPatch(
+            path=self.path,
+            lineno=p.lineno(1),
+            lexpos=p.lexpos(1),
+            name=p[3],
+            fields=p[6],
+            examples=p[7])
 
     def p_inheritance(self, p):
         """inheritance : EXTENDS type_ref
@@ -627,14 +410,14 @@ class StoneParser(object):
 
     def p_enumerated_subtype_field(self, p):
         'subtype_field : ID type_ref NL'
-        p[0] = StoneSubtypeField(
+        p[0] = AstSubtypeField(
             self.path, p.lineno(1), p.lexpos(1), p[1], p[2])
 
     # --------------------------------------------------------------
     # Fields
     #
     # Each struct has zero or more fields. A field has a name, type,
-    # and docstring. The "deprecated" keyword is currently unused.
+    # and docstring.
     #
     # TODO(kelkabany): Split fields into struct fields and union fields
     # since they differ in capabilities rather significantly now.
@@ -652,38 +435,79 @@ class StoneParser(object):
         p[0] = p[1]
         p[0].append(p[2])
 
-    def p_field_deprecation(self, p):
-        """deprecation : DEPRECATED
-                       | empty"""
-        p[0] = (p[1] == 'deprecated')
-
     def p_default_option(self, p):
         """default_option : EQ primitive
                           | EQ tag_ref
                           | empty"""
         if p[1]:
-            if isinstance(p[2], StoneTagRef):
+            if isinstance(p[2], AstTagRef):
                 p[0] = p[2]
             else:
                 p[0] = p[2]
 
     def p_field(self, p):
-        """field : ID type_ref default_option deprecation NL INDENT docstring NL DEDENT
-                 | ID type_ref default_option deprecation NL"""
-        has_docstring = len(p) > 6
-        p[0] = StoneField(
-            self.path, p.lineno(1), p.lexpos(1), p[1], p[2], p[4])
+        """field : ID type_ref default_option NL \
+                    INDENT annotation_ref_list docsection anony_def_option DEDENT
+                 | ID type_ref default_option NL"""
+        has_annotations = len(p) > 5 and p[6] is not None
+        has_docstring = len(p) > 5 and p[7] is not None
+        has_anony_def = len(p) > 5 and p[8] is not None
+        p[0] = AstField(
+            self.path, p.lineno(1), p.lexpos(1), p[1], p[2])
         if p[3] is not None:
-            if p[3] is StoneNull:
+            if p[3] is NullToken:
                 p[0].set_default(None)
             else:
                 p[0].set_default(p[3])
+        if has_annotations:
+            p[0].set_annotations(p[6])
         if has_docstring:
             p[0].set_doc(p[7])
+        if has_anony_def:
+            p[8].name = p[2].name
+            self.anony_defs.append(p[8])
+
+    def p_anony_def_option(self, p):
+        """anony_def_option : anony_def
+                            | empty"""
+        p[0] = p[1]
 
     def p_tag_ref(self, p):
         'tag_ref : ID'
-        p[0] = StoneTagRef(self.path, p.lineno(1), p.lexpos(1), p[1])
+        p[0] = AstTagRef(self.path, p.lineno(1), p.lexpos(1), p[1])
+
+    def p_annotation(self, p):
+        """annotation : ANNOTATION ID EQ ID args NL
+                      | ANNOTATION ID EQ ID DOT ID args NL"""
+        if len(p) < 8:
+            args, kwargs = p[5]
+            p[0] = AstAnnotationDef(
+                self.path, p.lineno(1), p.lexpos(1), p[2], p[4], None, args, kwargs)
+        else:
+            args, kwargs = p[7]
+            p[0] = AstAnnotationDef(
+                self.path, p.lineno(1), p.lexpos(1), p[2], p[6], p[4], args, kwargs)
+
+    def p_annotation_ref_list_create(self, p):
+        """annotation_ref_list : annotation_ref
+                               | empty"""
+        if p[1] is not None:
+            p[0] = [p[1]]
+        else:
+            p[0] = None
+
+    def p_annotation_ref_list_extend(self, p):
+        """annotation_ref_list : annotation_ref_list annotation_ref"""
+        p[0] = p[1]
+        p[0].append(p[2])
+
+    def p_annotation_ref(self, p):
+        """annotation_ref : AT ID NL
+                          | AT ID DOT ID NL"""
+        if len(p) < 5:
+            p[0] = AstAnnotationRef(self.path, p.lineno(1), p.lexpos(1), p[2], None)
+        else:
+            p[0] = AstAnnotationRef(self.path, p.lineno(1), p.lexpos(1), p[4], p[2])
 
     # --------------------------------------------------------------
     # Unions
@@ -700,35 +524,60 @@ class StoneParser(object):
     # void_field demonstrates the notation for a catch all variant.
 
     def p_union(self, p):
-        'union : UNION ID inheritance NL INDENT docsection field_list examples DEDENT'
-        p[0] = StoneUnionDef(
+        """union : uniont ID inheritance NL \
+                        INDENT docsection field_list examples DEDENT"""
+        self.make_union(p)
+
+    def p_anony_union(self, p):
+        """anony_def : uniont empty inheritance NL \
+                        INDENT docsection field_list examples DEDENT"""
+        self.make_union(p)
+
+    def make_union(self, p):
+        p[0] = AstUnionDef(
             path=self.path,
-            lineno=p.lineno(1),
-            lexpos=p.lexpos(1),
+            lineno=p[1][1],
+            lexpos=p[1][2],
             name=p[2],
             extends=p[3],
             doc=p[6],
             fields=p[7],
-            examples=p[8])
+            examples=p[8],
+            closed=p[1][0] == 'union_closed')
 
-    def p_asterix_option(self, p):
-        """asterix_option : ASTERIX
-                          | empty"""
-        p[0] = (p[1] is not None)
+    def p_union_patch(self, p):
+        """union_patch : PATCH uniont ID NL INDENT field_list examples DEDENT"""
+        p[0] = AstUnionPatch(
+            path=self.path,
+            lineno=p[2][1],
+            lexpos=p[2][2],
+            name=p[3],
+            fields=p[6],
+            examples=p[7],
+            closed=p[2][0] == 'union_closed')
+
+    def p_uniont(self, p):
+        """uniont : UNION
+                  | UNION_CLOSED"""
+        p[0] = (p[1], p.lineno(1), p.lexpos(1))
 
     def p_field_void(self, p):
-        """field : ID asterix_option NL
-                 | ID asterix_option NL INDENT docstring NL DEDENT"""
-        p[0] = StoneVoidField(self.path, p.lineno(1), p.lexpos(1), p[1], p[2])
-        if len(p) > 4:
-            p[0].set_doc(p[5])
+        """field : ID NL
+                 | ID NL INDENT annotation_ref_list docsection DEDENT"""
+        p[0] = AstVoidField(self.path, p.lineno(1), p.lexpos(1), p[1])
+        if len(p) > 3:
+            if p[4] is not None:
+                p[0].set_annotations(p[4])
+
+            if p[5] is not None:
+                p[0].set_doc(p[5])
 
     # --------------------------------------------------------------
     # Routes
     #
     # An example route looks as follows:
     #
-    # route sample-route/sub-path (arg, result, error)
+    # route sample-route/sub-path:2 (arg, result, error)
     #     "This is a docstring for the route"
     #
     #     attrs
@@ -737,20 +586,20 @@ class StoneParser(object):
     # The error type is optional.
 
     def p_route(self, p):
-        """route : ROUTE route_name route_io route_deprecation NL \
+        """route : ROUTE route_name route_version route_io route_deprecation NL \
                         INDENT docsection attrssection DEDENT
-                 | ROUTE route_name route_io route_deprecation NL"""
-        p[0] = StoneRouteDef(self.path, p.lineno(1), p.lexpos(1), p[2], p[4], *p[3])
-        if len(p) > 6:
-            p[0].set_doc(p[7])
-            if p[8]:
+                 | ROUTE route_name route_version route_io route_deprecation NL"""
+        p[0] = AstRouteDef(self.path, p.lineno(1), p.lexpos(1), p[2], p[3], p[5], *p[4])
+        if len(p) > 7:
+            p[0].set_doc(p[8])
+            if p[9]:
                 keys = set()
-                for attr in p[8]:
+                for attr in p[9]:
                     if attr.name in keys:
                         msg = "Attribute '%s' defined more than once." % attr.name
                         self.errors.append((msg, attr.lineno, attr.path))
                     keys.add(attr.name)
-                p[0].set_attrs(p[8])
+                p[0].set_attrs(p[9])
 
     def p_route_name(self, p):
         'route_name : ID route_path'
@@ -764,6 +613,17 @@ class StoneParser(object):
                       | empty"""
         p[0] = p[1]
 
+    def p_route_version(self, p):
+        """route_version : COLON INTEGER
+                         | empty"""
+        if len(p) > 2:
+            if p[2] <= 0:
+                msg = "Version number should be a positive integer."
+                self.errors.append((msg, p.lineno(2), self.path))
+            p[0] = p[2]
+        else:
+            p[0] = 1
+
     def p_route_io(self, p):
         """route_io : LPAR type_ref COMMA type_ref RPAR
                     | LPAR type_ref COMMA type_ref COMMA type_ref RPAR"""
@@ -774,12 +634,12 @@ class StoneParser(object):
 
     def p_route_deprecation(self, p):
         """route_deprecation : DEPRECATED
-                             | DEPRECATED BY route_name
+                             | DEPRECATED BY route_name route_version
                              | empty"""
-        if len(p) == 4:
-            p[0] = (True, p[3])
+        if len(p) == 5:
+            p[0] = (True, p[3], p[4])
         elif p[1]:
-            p[0] = (True, None)
+            p[0] = (True, None, None)
 
     def p_attrs_section(self, p):
         """attrssection : ATTRS NL INDENT attr_fields DEDENT
@@ -799,11 +659,11 @@ class StoneParser(object):
     def p_attr_field(self, p):
         """attr_field : ID EQ primitive NL
                       | ID EQ tag_ref NL"""
-        if p[3] is StoneNull:
-            p[0] = StoneAttrField(
+        if p[3] is NullToken:
+            p[0] = AstAttrField(
                 self.path, p.lineno(1), p.lexpos(1), p[1], None)
         else:
-            p[0] = StoneAttrField(
+            p[0] = AstAttrField(
                 self.path, p.lineno(1), p.lexpos(1), p[1], p[3])
 
     # --------------------------------------------------------------
@@ -876,11 +736,11 @@ class StoneParser(object):
                         "than once." % (p[2], example_field.name),
                         p.lineno(1), self.path))
                 seen_fields.add(example_field.name)
-            p[0] = StoneExample(
+            p[0] = AstExample(
                 self.path, p.lineno(1), p.lexpos(1), p[2], p[5],
                 OrderedDict((f.name, f) for f in p[6]))
         else:
-            p[0] = StoneExample(
+            p[0] = AstExample(
                 self.path, p.lineno(1), p.lexpos(1), p[2], None, OrderedDict())
 
     def p_example_fields_create(self, p):
@@ -894,18 +754,24 @@ class StoneParser(object):
 
     def p_example_field(self, p):
         """example_field : ID EQ primitive NL
-                         | ID EQ ex_list NL"""
-        if p[3] is StoneNull:
-            p[0] = StoneExampleField(
+                         | ID EQ ex_list NL
+                         | ID EQ ex_map NL"""
+        if p[3] is NullToken:
+            p[0] = AstExampleField(
                 self.path, p.lineno(1), p.lexpos(1), p[1], None)
         else:
-            p[0] = StoneExampleField(
+            p[0] = AstExampleField(
                 self.path, p.lineno(1), p.lexpos(1), p[1], p[3])
+
+    def p_example_multiline(self, p):
+        """example_field : ID EQ NL INDENT ex_map NL DEDENT"""
+        p[0] = AstExampleField(
+            self.path, p.lineno(1), p.lexpos(1), p[1], p[5])
 
     def p_example_field_ref(self, p):
         'example_field : ID EQ ID NL'
-        p[0] = StoneExampleField(self.path, p.lineno(1), p.lexpos(1),
-            p[1], StoneExampleRef(self.path, p.lineno(3), p.lexpos(3), p[3]))
+        p[0] = AstExampleField(self.path, p.lineno(1), p.lexpos(1),
+            p[1], AstExampleRef(self.path, p.lineno(3), p.lexpos(3), p[3]))
 
     # --------------------------------------------------------------
     # Example of list
@@ -920,14 +786,14 @@ class StoneParser(object):
 
     def p_ex_list_item_primitive(self, p):
         'ex_list_item : primitive'
-        if p[1] is StoneNull:
+        if p[1] is NullToken:
             p[0] = None
         else:
             p[0] = p[1]
 
     def p_ex_list_item_id(self, p):
         'ex_list_item : ID'
-        p[0] = StoneExampleRef(self.path, p.lineno(1), p.lexpos(1), p[1])
+        p[0] = AstExampleRef(self.path, p.lineno(1), p.lexpos(1), p[1])
 
     def p_ex_list_item_list(self, p):
         'ex_list_item : ex_list'
@@ -943,20 +809,68 @@ class StoneParser(object):
         p[0].append(p[3])
 
     # --------------------------------------------------------------
+    # Maps
+    #
+
+    def p_ex_map(self, p):
+        """ex_map : LBRACE ex_map_pairs RBRACE
+                  | LBRACE empty RBRACE"""
+        p[0] = p[2] or {}
+
+    def p_ex_map_multiline(self, p):
+        """ex_map : LBRACE NL INDENT ex_map_pairs NL DEDENT RBRACE"""
+        p[0] = p[4] or {}
+
+    def p_ex_map_elem_primitive(self, p):
+        """ex_map_elem : primitive"""
+        p[0] = None if p[1] == NullToken else p[1]
+
+    def p_ex_map_elem_composit(self, p):
+        """ex_map_elem : ex_map
+                       | ex_list"""
+        p[0] = p[1]
+
+    def p_ex_map_elem_id(self, p):
+        """ex_map_elem : ID"""
+        p[0] = AstExampleRef(self.path, p.lineno(1), p.lexpos(1), p[1])
+
+    def p_ex_map_pair(self, p):
+        """ex_map_pair : ex_map_elem COLON ex_map_elem"""
+        try:
+            p[0] = {p[1]: p[3]}
+        except TypeError:
+            msg = "%s is an invalid hash key because it cannot be hashed." % repr(p[1])
+            self.errors.append((msg, p.lineno(2), self.path))
+            p[0] = {}
+
+    def p_ex_map_pairs_create(self, p):
+        """ex_map_pairs : ex_map_pair """
+        p[0] = p[1]
+
+    def p_ex_map_pairs_extend(self, p):
+        """ex_map_pairs : ex_map_pairs COMMA ex_map_pair"""
+        p[0] = p[1]
+        p[0].update(p[3])
+
+    def p_ex_map_pairs_multiline(self, p):
+        """ex_map_pairs : ex_map_pairs COMMA NL ex_map_pair"""
+        p[0] = p[1]
+        p[0].update(p[4])
+
+    # --------------------------------------------------------------
 
     # In ply, this is how you define an empty rule. This is used when we want
     # the parser to treat a rule as optional.
     def p_empty(self, p):
         'empty :'
-        pass
 
     # Called by the parser whenever a token doesn't match any rule.
     def p_error(self, token):
         assert token is not None, "Unknown error, please report this."
-        self._logger.debug('Unexpected %s(%r) at line %d',
-                           token.type,
-                           token.value,
-                           token.lineno)
+        logger.debug('Unexpected %s(%r) at line %d',
+                     token.type,
+                     token.value,
+                     token.lineno)
         self.errors.append(
             ("Unexpected %s with value %s." %
              (token.type, repr(token.value).lstrip('u')),
